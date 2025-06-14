@@ -1,0 +1,116 @@
+---
+# tasks file for kubernetes_setup
+- name: Edit the Hosts file in both the nodes
+  blockinfile:
+    path: /etc/hosts
+    block: |
+      192.168.1.27 kube1.cloud.local kube1
+      192.168.1.28 vm1.raja.com vm1
+    insertafter: EOF
+    state: present
+    marker_begin: "# BEGIN ANSIBLE MANAGED BLOCK"
+    marker_end: "# END ANSIBLE MANAGED BLOCK"
+- name: Disable the swap 
+  shell: ' sudo swapoff -a; sudo sed -i "/ swap / s/^\(.*\)$/#\1/g" /etc/fstab '
+- name: Ensure containerd modules file exists with required content
+  copy:
+    dest: /etc/modules-load.d/containerd.conf
+    content: |
+      overlay
+      br_netfilter
+    owner: root
+    group: root
+    mode: '0644'
+- name: Check if overlay or br_netfilter module is loaded
+  command: lsmod | grep -E 'overlay|br_netfilter'
+  register: module_status
+  failed_when: module_status.rc > 1
+  changed_when: false
+  ignore_errors: yes
+
+- name: Load missing kernel modules
+  command: modprobe {{ item }}
+  become: yes
+  loop:
+    - overlay
+    - br_netfilter
+  when: module_status.rc != 0
+  ignore_errors: yes
+
+- name:  Write sysctl settings
+  copy:
+    dest: /etc/sysctl.d/kube.conf
+    content: |
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.bridge.bridge-nf-call-iptables = 1
+      net.ipv4.ip_forward = 1
+    owner: root
+    group: root
+    mode: '0644'
+- name: Apply sysctl settings
+  command: sudo sysctl --system
+
+- name: Check if Docker repo is already added
+  stat:
+    path: /etc/yum.repos.d/docker-ce.repo
+  register: docker_repo
+
+- name: Add Docker repo (only if not added before)
+  command: dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+  when: not docker_repo.stat.exists 
+
+- name: Install the Containerd package
+  dnf:
+    name: containerd
+    state: present
+- name: Generate default containerd config and save to /etc/containerd/config.toml
+  shell: "containerd config default | sudo tee /etc/containerd/config.toml >/dev/null 2>&1"
+
+- name: Update SystemdCgroup to true in containerd config
+  replace:
+      path: /etc/containerd/config.toml
+      regexp: 'SystemdCgroup\s*=\s*false'
+      replace: 'SystemdCgroup = true'
+- name: Start and enable containerd services
+  service:
+    name: containerd
+    state: started
+    enabled: true
+
+- name: Set SELinux to permissive mode
+  command: sudo setenforce 0
+
+- name: Set permissive mode permanently
+  replace:
+    path: /etc/selinux/config
+    regexp: 'SELINUX\s*=\s*enforcing'
+    replace: 'SELINUX = permissive'
+
+- name: Add kubernetes repo
+  copy:
+    dest: /etc/yum.repos.d/kubernetes.repo
+    content: |
+      [kubernetes]
+      name=Kubernetes
+      baseurl=https://pkgs.k8s.io/core:/stable:/v1.32/rpm/
+      enabled=1
+      gpgcheck=1
+      gpgkey=https://pkgs.k8s.io/core:/stable:/v1.32/rpm/repodata/repomd.xml.key
+      exclude=kubelet kubeadm kubectl cri-tools kubernetes-cni
+    mode: '0644'
+      #- name: Install kubectl kubeadm kubelet
+  #  shell: "sudo yum install -y kubelet kubeadm kubectl --disableexcludes=kubernetes; sudo systemctl enable --now kubelet"
+- name: Install kubectl kubeadm kubelet
+  yum:
+    name: "{{ item }}"
+    state: present
+    disable_excludes: kubernetes
+  loop:
+   - kubeadm
+   - kubelet
+   - kubectl
+- name: Start the service of kubernetes
+  service:
+    name: kubelet
+    state: started
+    enabled: yes

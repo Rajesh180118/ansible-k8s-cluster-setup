@@ -1,0 +1,46 @@
+---
+# tasks file for kubernetes_setup
+- name: Edit the Hosts file in both the nodes
+  blockinfile:
+    path: /etc/hosts
+    block: |
+      192.168.1.21 kube1.cloud.local kube1
+      192.168.1.28 vm1.raja.com vm1
+    insertafter: EOF
+    state: present
+    marker_begin: "# BEGIN ANSIBLE MANAGED BLOCK"
+    marker_end: "# END ANSIBLE MANAGED BLOCK"
+- name: Disable the swap 
+  shell: ' sudo swapoff -a; sudo sed -i "/ swap / s/^\(.*\)$/#\1/g" /etc/fstab '
+- name: Ensure containerd modules file exists with required content
+  copy:
+    dest: /etc/modules-load.d/containerd.conf
+    content: |
+      overlay
+      br_netfilter
+    owner: root
+    group: root
+    mode: '0644'
+- name: Check if overlay or br_netfilter module is loaded
+  command: lsmod | grep -E 'overlay|br_netfilter'
+  register: module_status
+  failed_when: module_status.rc > 1
+  changed_when: false
+  ignore_errors: yes
+
+- name: Load missing kernel modules
+  command: modprobe {{ item }}
+  become: yes
+  loop:
+    - overlay
+    - br_netfilter
+  when: module_status.rc != 0
+  ignore_errors: yes
+
+- name:  Write sysctl settings
+  blockinfile: 
+    path: /etc/sysctl.d/kube.conf
+    block: |
+      net.bridge.bridge-nf-call-ip6tables = 1
+      net.bridge.bridge-nf-call-iptables = 1
+      net.ipv4.ip_forward = 1
