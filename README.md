@@ -23,4 +23,12 @@ This repository contains Ansible playbooks to set up a Kubernetes cluster using 
 - Inventory file configured with IP addresses of master and worker nodes
 
 ## 📂 Structure
-
+.
+├── inventory/
+│ └── hosts # Inventory file with node IPs
+├── playbooks/
+│ ├── setup.yml # Common system setup
+├── roles/
+│ └── tasks
+|      |── main.yml
+├── README.md
